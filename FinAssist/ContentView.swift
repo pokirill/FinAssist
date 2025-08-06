@@ -9,7 +9,7 @@ struct ContentView: View {
                 didShowOnboarding = true
             }
         } else {
-            AppView() // <-- основной экран приложения
+            AppView()
         }
     }
-}
+} 

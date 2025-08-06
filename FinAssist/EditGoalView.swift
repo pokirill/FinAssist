@@ -1,5 +1,6 @@
 import SwiftUI
 
+
 struct EditGoalView: View {
     @Environment(\.dismiss) var dismiss
     @State var goal: Goal
@@ -80,4 +81,4 @@ struct EditGoalView: View {
         }
         .accentColor(Color(hex: "#2563EB"))
     }
-}
+} 

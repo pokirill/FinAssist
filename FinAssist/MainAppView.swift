@@ -1,5 +1,25 @@
 import SwiftUI
 
+let numberFormatter: NumberFormatter = {
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .decimal
+    formatter.groupingSeparator = " "
+    formatter.maximumFractionDigits = 0
+    return formatter
+}()
+
+let dateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateStyle = .medium
+    return formatter
+}()
+
+func formatInput(_ value: String) -> String {
+    let digits = value.replacingOccurrences(of: "\\D", with: "", options: .regularExpression)
+    guard let number = Int(digits) else { return "" }
+    return numberFormatter.string(from: NSNumber(value: number)) ?? ""
+}
+
 struct MainAppView: View {
     @State private var goals: [Goal] = []
     @State private var showingAddGoal = false
@@ -113,20 +133,21 @@ struct MainAppView: View {
                     AddGoalView(goals: $goals, onSave: saveGoals)
                 }
                 .sheet(item: $selectedGoal) { goal in
-                    DepositView(goal: Binding(
-                        get: {
-                            goals.first(where: { $0.id == goal.id }) ?? goal
-                        },
-                        set: { updated in
-                            if let idx = goals.firstIndex(where: { $0.id == updated.id }) {
-                                goals[idx] = updated
-                                saveGoals()
+                    DepositView(
+                        goal: Binding(
+                            get: {
+                                goals.first(where: { $0.id == goal.id }) ?? goal
+                            },
+                            set: { updated in
+                                if let idx = goals.firstIndex(where: { $0.id == updated.id }) {
+                                    goals[idx] = updated
+                                    saveGoals()
+                                }
                             }
-                        }
-                    )) {
-                        selectedGoal = nil
-                        saveGoals()
-                    }
+                        ),
+                        onClose: { selectedGoal = nil },
+                        onSave: saveGoals
+                    )
                 }
                 .sheet(item: $editingGoal) { goal in
                     EditGoalView(goal: goal, onSave: { updatedGoal in
@@ -142,11 +163,15 @@ struct MainAppView: View {
                 }
             }
         }
+        .onAppear {
+            loadGoals()
+        }
     }
 
     func saveGoals() {
         if let data = try? JSONEncoder().encode(goals) {
             UserDefaults.standard.set(data, forKey: goalsKey)
+            print("Сохранено целей: \(goals.count)")
         }
     }
 
@@ -154,6 +179,9 @@ struct MainAppView: View {
         if let data = UserDefaults.standard.data(forKey: goalsKey),
            let decoded = try? JSONDecoder().decode([Goal].self, from: data) {
             goals = decoded
+            print("Загружено целей: \(goals.count)")
+        } else {
+            print("Цели не найдены в UserDefaults")
         }
     }
 
@@ -253,36 +281,45 @@ struct MainAppView: View {
     }
 
     func forecastDate(goal: Goal, savingDay: Int, from: Date = Date()) -> Date? {
-        let monthlySaving = max(income, 0.0)
-        let leftToSave = max(goal.targetAmount - goal.currentAmount, 0.0)
-        let monthsToGoal = monthlySaving > 0 ? Int(ceil(leftToSave / monthlySaving)) : nil
-        guard let months = monthsToGoal, months >= 0 else { return nil }
-
         let calendar = Calendar.current
-        var components = calendar.dateComponents([.year, .month, .day], from: from)
-        let today = calendar.component(.day, from: from)
-
-        // Если день накопления еще не наступил или сегодня день накопления — первая сумма уже в этом месяце
-        if today <= savingDay {
-            // ничего не меняем, первая выплата в этом месяце
-        } else {
-            // если день накопления уже прошел — первая выплата только в следующем месяце
-            components.month! += 1
+        let leftToSave = max(goal.targetAmount - goal.currentAmount, 0.0)
+        guard leftToSave > 0 else { return Date() }
+        
+        // Загружаем актуальные данные
+        let actualIncome = loadActualIncomeData()
+        let actualExpenses = loadActualExpenses()
+        
+        var currentDate = from
+        var remainingAmount = leftToSave
+        var monthsChecked = 0
+        
+        // Проверяем каждый месяц до достижения цели
+        while remainingAmount > 0 && monthsChecked < 120 { // максимум 10 лет
+            let monthlyIncome = actualIncome.incomeForMonth(currentDate)
+            let monthlySaving = max(monthlyIncome - actualExpenses, 0.0)
+            
+            remainingAmount -= monthlySaving
+            
+            if remainingAmount <= 0 {
+                // Цель достигнута в этом месяце
+                var components = calendar.dateComponents([.year, .month], from: currentDate)
+                components.day = savingDay
+                return calendar.date(from: components)
+            }
+            
+            // Переходим к следующему месяцу
+            currentDate = calendar.date(byAdding: .month, value: 1, to: currentDate) ?? currentDate
+            monthsChecked += 1
         }
-        // Прибавляем оставшиеся месяцы
-        components.month! += months - 1
-        // Устанавливаем день накопления, но не больше последнего дня месяца
-        if let targetMonthDate = calendar.date(from: components),
-           let range = calendar.range(of: .day, in: .month, for: targetMonthDate) {
-            components.day = min(savingDay, range.count)
-            return calendar.date(from: components)
-        }
-        return nil
+        
+        return nil // Цель недостижима
     }
-}
 
-let dateFormatter: DateFormatter = {
-    let formatter = DateFormatter()
-    formatter.dateStyle = .medium
-    return formatter
-}()
+    private func loadActualIncomeData() -> Income {
+        if let incomeData = UserDefaults.standard.data(forKey: "user_income"),
+           let actualIncome = try? JSONDecoder().decode(Income.self, from: incomeData) {
+            return actualIncome
+        }
+        return Income()
+    }
+    }

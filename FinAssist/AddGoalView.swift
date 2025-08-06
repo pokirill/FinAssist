@@ -1,10 +1,10 @@
 import SwiftUI
 
+
 struct AddGoalView: View {
-    @Environment(\.dismiss) var dismiss
     @Binding var goals: [Goal]
     var onSave: (() -> Void)? = nil
-
+    @Environment(\.dismiss) var dismiss
     @State private var name: String = ""
     @State private var targetAmount: String = ""
     @State private var currentAmount: String = ""
@@ -14,36 +14,32 @@ struct AddGoalView: View {
     var body: some View {
         NavigationView {
             Form {
-                TextField("Название цели", text: $name)
-                TextField("Целевая сумма", text: $targetAmount)
-                    .keyboardType(.numberPad)
-                    .onChange(of: targetAmount) { newValue in
-                        targetAmount = formatInput(newValue)
-                    }
-                TextField("Уже накоплено (необязательно)", text: $currentAmount)
-                    .keyboardType(.numberPad)
-                    .onChange(of: currentAmount) { newValue in
-                        currentAmount = formatInput(newValue)
-                    }
-                DatePicker("Желаемая дата", selection: $targetDate, displayedComponents: .date)
-                TextField("Описание (необязательно)", text: $description)
+                Section(header: Text("Название цели")) {
+                    TextField("Название", text: $name)
+                }
+                Section(header: Text("Целевая сумма")) {
+                    TextField("Целевая сумма", text: $targetAmount)
+                        .keyboardType(.decimalPad)
+                }
+                Section(header: Text("Уже накоплено")) {
+                    TextField("Уже накоплено", text: $currentAmount)
+                        .keyboardType(.decimalPad)
+                }
+                Section(header: Text("Желаемая дата")) {
+                    DatePicker("Дата", selection: $targetDate, displayedComponents: .date)
+                }
+                Section(header: Text("Описание")) {
+                    TextField("Описание", text: $description)
+                }
             }
-            .navigationTitle("Новая цель")
+            .navigationTitle("Добавить цель")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Добавить") {
-                        let goal = Goal(
-                            name: name,
-                            targetAmount: parseInput(targetAmount),
-                            currentAmount: parseInput(currentAmount),
-                            targetDate: targetDate,
-                            description: description
-                        )
-                        goals.append(goal)
-                        onSave?()
+                    Button("Сохранить") {
+                        addGoal()
                         dismiss()
                     }
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || parseInput(targetAmount) <= 0)
+                    .disabled(!isValid)
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Отмена") {
@@ -54,18 +50,20 @@ struct AddGoalView: View {
         }
     }
 
-    // Форматирование с разделителями тысяч и только цифры
-    func formatInput(_ input: String) -> String {
-        let filtered = input.filter { "0123456789".contains($0) }
-        guard let number = Int(filtered) else { return "" }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.groupingSeparator = " "
-        return formatter.string(from: NSNumber(value: number)) ?? ""
+    var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
+        Double(targetAmount.replacingOccurrences(of: " ", with: "")) ?? 0 > 0
     }
 
-    // Преобразование строки в Double без пробелов
-    func parseInput(_ input: String) -> Double {
-        Double(input.replacingOccurrences(of: " ", with: "")) ?? 0
+    private func addGoal() {
+        let newGoal = Goal(
+            name: name,
+            targetAmount: Double(targetAmount.replacingOccurrences(of: " ", with: "")) ?? 0,
+            currentAmount: Double(currentAmount.replacingOccurrences(of: " ", with: "")) ?? 0,
+            targetDate: targetDate,
+            description: description
+        )
+        goals.append(newGoal)
+        onSave?()
     }
-}
+} 
