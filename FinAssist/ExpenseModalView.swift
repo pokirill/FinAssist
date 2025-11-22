@@ -1,70 +1,186 @@
 import SwiftUI
 
-
 struct ExpenseModalView: View {
     @Binding var expense: Expense
+    @Binding var credits: [Credit]
     var onSave: (() -> Void)?
     @Environment(\.dismiss) var dismiss
     
-    @State private var currentStep = 0
     @State private var additionalExpenses: [AdditionalExpense] = []
+    @State private var expenseAmounts: [ExpenseCategory: String] = [:]
+    @State private var expenseDays: [ExpenseCategory: Int?] = [:]
+    @State private var showingCreditManagement = false
     
-    private let categories = ExpenseCategory.allCases
+    // Исключаем кредиты из списка категорий, так как они управляются отдельно
+    private let categories: [ExpenseCategory] = [
+        .rent,
+        .utilities,
+        .groceries,
+        .communication,
+        .subscriptions,
+        .transport,
+        .hobbies,
+        .entertainment,
+        .beauty,
+        .marketplaces
+    ]
     
     var body: some View {
         NavigationView {
             ZStack {
                 AppColors.background.ignoresSafeArea()
-                
-                VStack(spacing: 0) {
-                    // Прогресс бар
-                    HStack {
-                        ForEach(0..<categories.count, id: \.self) { index in
-                            Rectangle()
-                                .fill(index <= currentStep ? AppColors.primary : AppColors.primary.opacity(0.3))
-                                .frame(height: 4)
-                                .animation(.easeInOut, value: currentStep)
+                ScrollView {
+                    VStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Уточните примерные траты по категориям")
+                                .font(.headline)
+                                .foregroundColor(AppColors.textPrimary)
+                            Text("Укажите ежемесячные суммы в рублях")
+                                .font(.subheadline)
+                                .foregroundColor(AppColors.textSecondary)
                         }
-                    }
-                    .padding(.horizontal)
-                    .padding(.top)
-                    
-                    // Контент
-                    TabView(selection: $currentStep) {
-                        ForEach(0..<categories.count, id: \.self) { index in
-                            expenseStep(for: categories[index])
-                                .tag(index)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+
+                        ForEach(categories, id: \.self) { category in
+                            ExpenseCategoryCard(
+                                category: category,
+                                amount: Binding(
+                                    get: {
+                                        if let value = expenseAmounts[category] {
+                                            return value
+                                        }
+                                        let fallback = getExpenseAmountString(for: category)
+                                        expenseAmounts[category] = fallback
+                                        return fallback
+                                    },
+                                    set: { newValue in
+                                        let formatted = AppUtils.formatInput(newValue)
+                                        expenseAmounts[category] = formatted
+                                        updateExpense(
+                                            for: category,
+                                            amount: Double(
+                                                formatted.replacingOccurrences(of: " ", with: "")
+                                            ) ?? 0
+                                        )
+                                    }
+                                ),
+                                day: Binding(
+                                    get: { expenseDays[category] ?? nil },
+                                    set: { newValue in
+                                        // Если выбрано "—" (nil), удаляем из словаря
+                                        if let value = newValue {
+                                            expenseDays[category] = value
+                                        } else {
+                                            expenseDays.removeValue(forKey: category)
+                                        }
+                                        updateExpenseDay(for: category, day: newValue)
+                                    }
+                                )
+                            )
                         }
-                    }
-                    .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-                    .animation(.easeInOut, value: currentStep)
-                    
-                    // Навигация
-                    HStack {
-                        if currentStep > 0 {
-                            Button("Назад") {
-                                withAnimation {
-                                    currentStep -= 1
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Кошелёк (повседневные траты)")
+                                .font(.headline)
+                                .foregroundColor(AppColors.textPrimary)
+                            TextField("Сумма", text: Binding(
+                                get: { AppUtils.numberFormatter.string(from: NSNumber(value: expense.walletDaily)) ?? "" },
+                                set: { newValue in
+                                    let formatted = AppUtils.formatInput(newValue)
+                                    expense.walletDaily = Double(formatted.replacingOccurrences(of: " ", with: "")) ?? 0
                                 }
+                            ))
+                            .keyboardType(.numberPad)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        }
+                        .padding()
+                        .background(AppColors.surface)
+                        .cornerRadius(12)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Дополнительные расходы")
+                                .font(.headline)
+                                .foregroundColor(AppColors.textPrimary)
+                            Text("Добавьте расходы, которые не подходят под основные категории")
+                                .font(.subheadline)
+                                .foregroundColor(AppColors.textSecondary)
+                            ForEach(additionalExpenses.indices, id: \.self) { index in
+                                AdditionalExpenseCard(expense: $additionalExpenses[index], onDelete: {
+                                    additionalExpenses.remove(at: index)
+                                })
                             }
+                            Button(action: {
+                                additionalExpenses.append(AdditionalExpense(name: "", amount: 0, comment: ""))
+                            }) {
+                                HStack {
+                                    Image(systemName: "plus.circle")
+                                    Text("Добавить расход")
+                                }
+                                .foregroundColor(AppColors.primary)
+                                .padding()
+                                .frame(maxWidth: .infinity)
+                                .background(AppColors.surface)
+                                .cornerRadius(12)
+                            }
+                        }
+                        .padding()
+                        .background(AppColors.surface)
+                        .cornerRadius(12)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Кредиты и займы")
+                            .font(.headline)
+                            .foregroundColor(AppColors.textPrimary)
+                        if credits.isEmpty {
+                            Text("Добавьте кредиты, чтобы они учитывались в общей картине расходов.")
+                                .font(.caption)
+                                .foregroundColor(AppColors.textSecondary)
+                        } else {
+                            ForEach(credits) { credit in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(credit.name)
+                                            .font(.subheadline)
+                                            .foregroundColor(AppColors.textPrimary)
+                                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: credit.monthlyAmount)) ?? "0") ₽")
+                                            .font(.caption)
+                                            .foregroundColor(AppColors.danger)
+                                    }
+                                    Spacer()
+                                    Text("\(credit.day) число")
+                                        .font(.caption2)
+                                        .foregroundColor(AppColors.textSecondary)
+                                }
+                                .padding()
+                                .background(AppColors.surface.opacity(0.4))
+                                .cornerRadius(10)
+                            }
+                        }
+                        Button(action: {
+                            showingCreditManagement = true
+                        }) {
+                            HStack {
+                                Image(systemName: "creditcard")
+                                Text(credits.isEmpty ? "Добавить кредит" : "Управлять кредитами")
+                            }
+                            .font(.subheadline)
                             .foregroundColor(AppColors.primary)
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(AppColors.background)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(AppColors.primary.opacity(0.4), lineWidth: 1)
+                            )
                         }
-                        
-                        Spacer()
-                        
-                        Button(currentStep == categories.count - 1 ? "Завершить" : "Далее") {
-                            if currentStep == categories.count - 1 {
-                                saveExpenses()
-                                dismiss()
-                            } else {
-                                withAnimation {
-                                    currentStep += 1
-                                }
-                            }
-                        }
-                        .foregroundColor(AppColors.primary)
-                        .disabled(!canProceed)
                     }
+                    .padding()
+                    .background(AppColors.surface)
+                    .cornerRadius(12)
                     .padding()
                 }
             }
@@ -72,256 +188,204 @@ struct ExpenseModalView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Отмена") {
+                    Button("Отмена") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Сохранить") {
+                        saveExpenses()
                         dismiss()
                     }
+                    .foregroundColor(AppColors.primary)
                 }
             }
         }
-    }
-    
-    // Шаг для каждой категории расходов
-    private func expenseStep(for category: ExpenseCategory) -> some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(category.rawValue)
-                        .font(.title2).bold()
-                        .foregroundColor(AppColors.textPrimary)
-                    
-                    if category == .additional {
-                        Text("Здесь указываются регулярные траты, не вошедшие в категории выше")
-                            .font(.subheadline)
-                            .foregroundColor(AppColors.textSecondary)
-                        
-                        Text("Например: ветеринарные услуги, подарки, траты на образование, поездки, авто, ремонт и пр.")
-                            .font(.caption)
-                            .foregroundColor(AppColors.textSecondary)
-                            .padding(.top, 4)
-                    } else {
-                        Text("Укажите приблизительно, кратно тысяче")
-                            .font(.subheadline)
-                            .foregroundColor(AppColors.textSecondary)
-                    }
-                }
-                
-                if category == .additional {
-                    additionalExpensesView
-                } else {
-                    regularExpenseView(for: category)
-                }
-            }
-            .padding()
-        }
-    }
-    
-    // Обычная категория расходов
-    private func regularExpenseView(for category: ExpenseCategory) -> some View {
-        VStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Сумма")
-                    .font(.headline)
-                    .foregroundColor(AppColors.textPrimary)
-                
-                TextField("0", text: Binding(
-                    get: { getExpenseAmountString(for: category) },
-                    set: { newValue in
-                        let formatted = formatInput(newValue)
-                        updateExpense(for: category, amount: Double(formatted.replacingOccurrences(of: " ", with: "")) ?? 0)
-                    }
-                ))
-                .keyboardType(.numberPad)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            }
-            
-            if category == .rent || category == .loans {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("День месяца")
-                        .font(.headline)
-                        .foregroundColor(AppColors.textPrimary)
-                    
-                    Picker("День месяца", selection: .constant(15)) {
-                        ForEach(1...28, id: \.self) { day in
-                            Text("\(day)").tag(day)
-                        }
-                    }
-                    .pickerStyle(WheelPickerStyle())
-                    .frame(height: 120)
-                }
+        .sheet(isPresented: $showingCreditManagement) {
+            CreditManagementView(credits: $credits)
+                .onDisappear {
+                    onSave?()
             }
         }
-    }
-    
-    // Дополнительные расходы
-    private var additionalExpensesView: some View {
-        VStack(spacing: 16) {
-            ForEach(additionalExpenses.indices, id: \.self) { index in
-                AdditionalExpenseCard(expense: $additionalExpenses[index], onDelete: {
-                    additionalExpenses.remove(at: index)
-                })
-            }
-            
-            Button(action: {
-                additionalExpenses.append(AdditionalExpense(name: "", amount: 0, comment: ""))
-            }) {
-                HStack {
-                    Image(systemName: "plus.circle")
-                    Text("Добавить расход")
-                }
-                .foregroundColor(AppColors.primary)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(AppColors.surface)
-                .cornerRadius(12)
-            }
+        .onAppear {
+            loadExistingData()
         }
     }
-    
-    // Шаг завершения
-    private var completionStep: some View {
-        VStack(spacing: 20) {
-            Spacer()
-            
-            VStack(spacing: 16) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 60))
-                    .foregroundColor(AppColors.success)
-                
-                Text("Данные о расходах заполнены!")
-                    .font(.title2)
-                    .foregroundColor(AppColors.textPrimary)
-                    .multilineTextAlignment(.center)
-                
-                Text("Теперь вы можете получить точную аналитику ваших финансов")
-                    .font(.subheadline)
-                    .foregroundColor(AppColors.textSecondary)
-                    .multilineTextAlignment(.center)
+
+    private func loadExistingData() {
+        additionalExpenses = expense.additional
+        expenseAmounts.removeAll()
+        expenseDays.removeAll()
+
+        categories.forEach { category in
+            let amount = getExpenseAmount(for: category)
+            if amount > 0 {
+                expenseAmounts[category] = AppUtils.numberFormatter.string(from: NSNumber(value: amount)) ?? ""
             }
-            
-            Spacer()
+            if let day = getExpenseDay(for: category) {
+                expenseDays[category] = day
+            }
         }
-        .padding()
+        // wallet
+        expenseAmounts[.additional] = "" // ensure placeholder unaffected
     }
-    
-    private var canProceed: Bool {
-        let currentCategory = categories[currentStep]
-        
-        if currentCategory == .additional {
-            return true // Разрешаем переход даже без данных
-        } else {
-            let amount = getExpenseAmount(for: currentCategory)
-            return true // Разрешаем переход даже без данных
-        }
-    }
-    
+
     private func updateExpense(for category: ExpenseCategory, amount: Double) {
         switch category {
-        case .rent:
-            expense.rent = amount
-        case .loans:
-            expense.loans = amount
-        case .utilities:
-            expense.utilities = amount
-        case .groceries:
-            expense.groceries = amount
-        case .communication:
-            expense.communication = amount
-        case .subscriptions:
-            expense.subscriptions = amount
-        case .transport:
-            expense.transport = amount
-        case .hobbies:
-            expense.hobbies = amount
-        case .entertainment:
-            expense.entertainment = amount
-        case .beauty:
-            expense.beauty = amount
-        case .additional:
-            break // Обрабатывается отдельно
+        case .rent: expense.rent = amount
+        case .loans: expense.loans = amount
+        case .utilities: expense.utilities = amount
+        case .groceries: expense.groceries = amount
+        case .communication: expense.communication = amount
+        case .subscriptions: expense.subscriptions = amount
+        case .transport: expense.transport = amount
+        case .hobbies: expense.hobbies = amount
+        case .entertainment: expense.entertainment = amount
+        case .beauty: expense.beauty = amount
+        case .marketplaces: expense.marketplaces = amount
+        case .additional: break
         }
     }
-    
+
+    private func updateExpenseDay(for category: ExpenseCategory, day: Int?) {
+        switch category {
+        case .rent: expense.rentDay = day
+        case .loans: expense.loansDay = day
+        case .utilities: expense.utilitiesDay = day
+        case .groceries: expense.groceriesDay = day
+        case .communication: expense.communicationDay = day
+        case .subscriptions: expense.subscriptionsDay = day
+        case .transport: expense.transportDay = day
+        case .hobbies: expense.hobbiesDay = day
+        case .entertainment: expense.entertainmentDay = day
+        case .beauty: expense.beautyDay = day
+        case .marketplaces: expense.marketplacesDay = day
+        case .additional: break
+        }
+    }
+
     private func getExpenseAmount(for category: ExpenseCategory) -> Double {
         switch category {
-        case .rent:
-            return expense.rent
-        case .loans:
-            return expense.loans
-        case .utilities:
-            return expense.utilities
-        case .groceries:
-            return expense.groceries
-        case .communication:
-            return expense.communication
-        case .subscriptions:
-            return expense.subscriptions
-        case .transport:
-            return expense.transport
-        case .hobbies:
-            return expense.hobbies
-        case .entertainment:
-            return expense.entertainment
-        case .beauty:
-            return expense.beauty
-        case .additional:
-            return additionalExpenses.reduce(0) { $0 + $1.amount }
+        case .rent: return expense.rent
+        case .loans: return expense.loans
+        case .utilities: return expense.utilities
+        case .groceries: return expense.groceries
+        case .communication: return expense.communication
+        case .subscriptions: return expense.subscriptions
+        case .transport: return expense.transport
+        case .hobbies: return expense.hobbies
+        case .entertainment: return expense.entertainment
+        case .beauty: return expense.beauty
+        case .marketplaces: return expense.marketplaces
+        case .additional: return 0
         }
     }
-    
+
+    private func getExpenseDay(for category: ExpenseCategory) -> Int? {
+        switch category {
+        case .rent: return expense.rentDay
+        case .loans: return expense.loansDay
+        case .utilities: return expense.utilitiesDay
+        case .groceries: return expense.groceriesDay
+        case .communication: return expense.communicationDay
+        case .subscriptions: return expense.subscriptionsDay
+        case .transport: return expense.transportDay
+        case .hobbies: return expense.hobbiesDay
+        case .entertainment: return expense.entertainmentDay
+        case .beauty: return expense.beautyDay
+        case .marketplaces: return expense.marketplacesDay
+        case .additional: return nil
+        }
+    }
+
     private func getExpenseAmountString(for category: ExpenseCategory) -> String {
         let amount = getExpenseAmount(for: category)
-        return numberFormatter.string(from: NSNumber(value: amount)) ?? ""
+        return AppUtils.numberFormatter.string(from: NSNumber(value: amount)) ?? ""
     }
-    
+
     private func saveExpenses() {
         expense.additional = additionalExpenses
         onSave?()
     }
 }
 
-// Карточка дополнительного расхода
-struct AdditionalExpenseCard: View {
-    @Binding var expense: AdditionalExpense
-    var onDelete: () -> Void
-    @State private var name = ""
-    @State private var amount = ""
-    @State private var comment = ""
+struct ExpenseCategoryCard: View {
+    let category: ExpenseCategory
+    @Binding var amount: String
+    @Binding var day: Int?
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Дополнительный расход")
-                    .font(.headline)
-                    .foregroundColor(AppColors.textPrimary)
-                
-                Spacer()
-                
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .foregroundColor(AppColors.danger)
-                }
-            }
-            
-            VStack(spacing: 8) {
-                TextField("Название", text: $name)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: name) { expense.name = $0 }
-                
-                TextField("Сумма", text: $amount)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(category.rawValue)
+                .font(.headline)
+                .foregroundColor(AppColors.textPrimary)
+            HStack(spacing: 12) {
+                TextField("0", text: $amount)
                     .keyboardType(.numberPad)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: amount) {
-                        amount = formatInput($0)
-                        expense.amount = Double(amount.replacingOccurrences(of: " ", with: "")) ?? 0
+                    .onChange(of: amount) { newValue in
+                        amount = AppUtils.formatInput(newValue)
                     }
-                
-                TextField("Комментарий (необязательно)", text: $comment)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: comment) { expense.comment = $0 }
+                DaySelector(day: $day)
             }
         }
         .padding()
         .background(AppColors.surface)
         .cornerRadius(12)
     }
-} 
+}
+
+struct DaySelector: View {
+    @Binding var day: Int?
+    
+    var body: some View {
+        // Используем Menu для компактности, визуально похож на кнопку/пикер
+        Menu {
+            Button("—") { day = nil }
+            ForEach(1...28, id: \.self) { value in
+                Button("\(value)") { day = value }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(day.map { "\($0)" } ?? "—")
+                    .font(.system(.body, design: .rounded))
+                    .foregroundColor(AppColors.textPrimary)
+                    .frame(minWidth: 24) // Фиксированная ширина для цифр
+                
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundColor(AppColors.textSecondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(AppColors.background)
+            .cornerRadius(8)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(AppColors.textSecondary.opacity(0.2), lineWidth: 1)
+            )
+        }
+    }
+}
+
+struct AdditionalExpenseCard: View {
+    @Binding var expense: AdditionalExpense
+    var onDelete: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                TextField("Название", text: $expense.name)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .foregroundColor(.red)
+                }
+            }
+            TextField("Сумма", value: $expense.amount, formatter: NumberFormatter())
+                .keyboardType(.numberPad)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+        }
+        .padding()
+        .background(AppColors.surface)
+        .cornerRadius(12)
+    }
+}

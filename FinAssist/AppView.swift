@@ -6,7 +6,13 @@ struct AppView: View {
             MainAppView()
                 .tabItem {
                     Image(systemName: "target")
-                    Text("Мои цели")
+                    Text("Цели")
+                }
+            
+            WishlistView()
+                .tabItem {
+                    Image(systemName: "star.circle")
+                    Text("Хотелки")
                 }
             
             IncomeExpenseView()

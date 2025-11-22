@@ -1,16 +1,18 @@
 import SwiftUI
 
 struct AppColors {
+    // Акцентные цвета (одинаковые для светлой и темной темы)
     static let primary = Color(hex: "#2563EB")
     static let accent = Color(hex: "#3B82F6")
     static let success = Color(hex: "#10B981")
     static let danger = Color(hex: "#EF4444")
     static let warning = Color(hex: "#F59E0B")
     
-    static let background = Color(hex: "#F8FAFC")
-    static let surface = Color.white
-    static let textPrimary = Color(hex: "#1E293B")
-    static let textSecondary = Color(hex: "#64748B")
+    // Адаптивные цвета для светлой/темной темы
+    static let background = Color(uiColor: UIColor.systemGroupedBackground)
+    static let surface = Color(uiColor: UIColor.secondarySystemGroupedBackground)
+    static let textPrimary = Color(uiColor: UIColor.label)
+    static let textSecondary = Color(uiColor: UIColor.secondaryLabel)
 }
 
 extension Color {
@@ -37,5 +39,34 @@ extension Color {
             blue:  Double(b) / 255,
             opacity: Double(a) / 255
         )
+    }
+}
+
+// Общие утилиты для форматирования
+struct AppUtils {
+    static let numberFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.groupingSeparator = " "
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+    
+    static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter
+    }()
+    
+    static let shortDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "dd.MM.yy"
+        return formatter
+    }()
+    
+    static func formatInput(_ value: String) -> String {
+        let digits = value.replacingOccurrences(of: "\\D", with: "", options: .regularExpression)
+        guard let number = Int(digits) else { return "" }
+        return numberFormatter.string(from: NSNumber(value: number)) ?? ""
     }
 }
