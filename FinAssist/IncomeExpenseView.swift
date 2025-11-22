@@ -1,29 +1,72 @@
 import SwiftUI
 
-
 struct IncomeExpenseView: View {
     @State private var income: Income = Income()
     @State private var expense: Expense = Expense()
+    @State private var credits: [Credit] = []
+    @State private var goals: [Goal] = []
     @State private var showingIncomeModal = false
     @State private var showingExpenseModal = false
     @State private var showingAnalytics = false
+    @State private var showingPeriodDistribution = false
     @State private var manualSavingAmount: Double = 0
     @State private var hasCalculatedThroughApp = false
     
     @AppStorage("monthlySaving") private var monthlySaving: Double = 0
     @AppStorage("savingDay") private var savingDay: Int = 10
+    @AppStorage("emergencyFundEnabled") private var emergencyFundEnabled: Bool = true
     
     private let incomeKey = "user_income"
     private let expenseKey = "user_expense"
+    private let creditsKey = "user_credits"
     
+    // Доступно для целей и жизни (Net Income)
+    static func sumActiveCreditPayments(from credits: [Credit]) -> Double {
+        credits.reduce(0.0) { sum, credit in
+            guard credit.endDate == nil || credit.endDate! > Date() else { return sum }
+            return sum + credit.monthlyAmount
+        }
+    }
+
+    private var totalCreditPayments: Double {
+        Self.sumActiveCreditPayments(from: credits)
+    }
+
+    private var totalExpensesWithCredits: Double {
+        expense.totalMonthlyExpense + totalCreditPayments
+    }
+
     var availableForGoals: Double {
-        let totalIncome = income.totalMonthlyIncome
-        let totalExpense = expense.totalMonthlyExpense
-        let available = totalIncome - totalExpense
+        income.totalMonthlyIncome - totalExpensesWithCredits
+    }
+    
+    // Потребность целей в месяц
+    var goalsRequirement: Double {
+        var req: Double = 0
         
-        print("Расчет: доходы \(totalIncome) - расходы \(totalExpense) = доступно \(available)")
+        // Подушка
+        if emergencyFundEnabled, let ef = goals.first(where: { $0.type == .emergencyFund }), !ef.isAchieved {
+            req += calculateMonthlyReq(for: ef)
+        }
         
-        return available
+        // Остальные активные цели
+        let activeGoals = goals.filter { $0.type != .emergencyFund && !$0.isAchieved }
+        for goal in activeGoals {
+            req += calculateMonthlyReq(for: goal)
+        }
+        return req
+    }
+    
+    // Кошелек (остаток после целей)
+    var walletAmount: Double {
+        availableForGoals - goalsRequirement
+    }
+    
+    private func calculateMonthlyReq(for goal: Goal) -> Double {
+        let remaining = max(0, goal.targetAmount - goal.currentAmount)
+        let days = Calendar.current.dateComponents([.day], from: Date(), to: goal.targetDate).day ?? 30
+        let months = max(1, Double(days) / 30.0)
+        return remaining / months
     }
     
     var body: some View {
@@ -31,7 +74,7 @@ struct IncomeExpenseView: View {
             ZStack {
                 AppColors.background.ignoresSafeArea()
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Ежемесячно")
+                    Text("Доходы и расходы")
                         .font(.largeTitle).bold()
                         .foregroundColor(AppColors.textPrimary)
                         .padding([.top, .horizontal])
@@ -63,7 +106,18 @@ struct IncomeExpenseView: View {
                     IncomeModalView(income: $income, onSave: saveData)
                 }
                 .sheet(isPresented: $showingExpenseModal) {
-                    ExpenseModalView(expense: $expense, onSave: saveData)
+                    ExpenseModalView(expense: $expense, credits: $credits, onSave: {
+                        saveData()
+                        loadData()
+                    })
+                }
+                .sheet(isPresented: $showingPeriodDistribution) {
+                    PeriodDistributionView(
+                        income: income,
+                        expense: $expense,
+                        credits: $credits,
+                        goals: goals
+                    )
                 }
             }
         }
@@ -90,7 +144,7 @@ struct IncomeExpenseView: View {
                 }) {
                     HStack {
                         Image(systemName: "hand.point.up")
-                            .foregroundColor(AppColors.primary)
+                        .foregroundColor(AppColors.primary)
                         Text("Указать сумму накоплений самостоятельно")
                             .foregroundColor(AppColors.primary)
                     }
@@ -101,13 +155,13 @@ struct IncomeExpenseView: View {
                 }
                 
                 Button(action: {
-                    showingIncomeModal = true
+                    hasCalculatedThroughApp = true
                 }) {
                     HStack {
-                        Image(systemName: "calculator")
-                            .foregroundColor(AppColors.accent)
-                        Text("Рассчитать сумму через приложение")
-                            .foregroundColor(AppColors.accent)
+                        Image(systemName: "chart.bar")
+                        .foregroundColor(AppColors.primary)
+                        Text("Рассчитать через доходы и расходы")
+                            .foregroundColor(AppColors.primary)
                     }
                     .padding()
                     .frame(maxWidth: .infinity)
@@ -124,36 +178,28 @@ struct IncomeExpenseView: View {
     // Ручной ввод
     private var manualInputView: some View {
         VStack(spacing: 20) {
+            Spacer()
+            
             VStack(spacing: 16) {
-                Text("Ваша сумма накоплений")
+                Text("Укажите ежемесячную сумму накоплений")
                     .font(.title2)
                     .foregroundColor(AppColors.textPrimary)
+                    .multilineTextAlignment(.center)
                 
-                HStack {
-                    Text("\(numberFormatter.string(from: NSNumber(value: monthlySaving)) ?? "0") ₽")
-                        .font(.largeTitle).bold()
-                        .foregroundColor(AppColors.primary)
-                    
-                    Button(action: {
-                        // Показать модалку для редактирования
-                    }) {
-                        Image(systemName: "pencil")
-                            .foregroundColor(AppColors.accent)
-                    }
-                }
+                TextField("Сумма", value: $manualSavingAmount, format: .number)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding()
                 
                 Button(action: {
-                    showingIncomeModal = true
+                    monthlySaving = manualSavingAmount
                 }) {
-                    HStack {
-                        Image(systemName: "calculator")
-                        Text("Рассчитать через приложение")
-                    }
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(AppColors.primary)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
+                    Text("Сохранить")
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(AppColors.primary)
+                        .cornerRadius(12)
                 }
             }
             .padding()
@@ -173,7 +219,7 @@ struct IncomeExpenseView: View {
                             .font(.headline)
                             .foregroundColor(AppColors.textPrimary)
                         Spacer()
-                        Text("\(numberFormatter.string(from: NSNumber(value: income.totalMonthlyIncome)) ?? "0") ₽")
+                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: income.totalMonthlyIncome)) ?? "0") ₽")
                             .font(.headline)
                             .foregroundColor(AppColors.success)
                     }
@@ -183,64 +229,115 @@ struct IncomeExpenseView: View {
                             .font(.headline)
                             .foregroundColor(AppColors.textPrimary)
                         Spacer()
-                        Text("\(numberFormatter.string(from: NSNumber(value: expense.totalMonthlyExpense)) ?? "0") ₽")
+                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: totalExpensesWithCredits)) ?? "0") ₽")
                             .font(.headline)
                             .foregroundColor(AppColors.danger)
                     }
                     
+                    if !credits.isEmpty {
+                        let totalCreditPayments = credits.reduce(0.0) { sum, credit in
+                            if credit.endDate == nil || credit.endDate! > Date() {
+                                return sum + credit.monthlyAmount
+                            }
+                            return sum
+                        }
+                        
+                        HStack {
+                            Text("Кредиты")
+                                .font(.headline)
+                                .foregroundColor(AppColors.textPrimary)
+                            Spacer()
+                            Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: totalCreditPayments)) ?? "0") ₽")
+                                .font(.headline)
+                                .foregroundColor(AppColors.warning)
+                        }
+                    }
+                    
                     Divider()
                     
+                    // Net Income
                     HStack {
                         Text("Доступно для целей")
                             .font(.headline)
                             .foregroundColor(AppColors.textPrimary)
                         Spacer()
-                        Text("\(numberFormatter.string(from: NSNumber(value: availableForGoals)) ?? "0") ₽")
+                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: availableForGoals)) ?? "0") ₽")
                             .font(.headline)
                             .foregroundColor(AppColors.primary)
+                    }
+                    
+                    // Wallet (Residual)
+                    HStack {
+                        Text("Кошелёк (остаток)")
+                            .font(.headline)
+                            .foregroundColor(AppColors.textSecondary)
+                        Spacer()
+                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: walletAmount)) ?? "0") ₽")
+                            .font(.headline)
+                            .foregroundColor(AppColors.success)
                     }
                 }
                 .padding()
                 .background(AppColors.surface)
                 .cornerRadius(12)
                 
+                // Круговая диаграмма расходов
+                ExpensePieChart(expense: expense)
+                    .padding()
+                    .background(AppColors.surface)
+                    .cornerRadius(12)
+                
                 // Кнопки редактирования
-                HStack(spacing: 12) {
-                    Button(action: {
-                        showingIncomeModal = true
-                    }) {
-                        HStack {
-                            Image(systemName: "plus.circle")
-                            Text("Доходы")
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            showingIncomeModal = true
+                        }) {
+                            HStack {
+                                Image(systemName: "plus.circle")
+                                Text("Доходы")
+                            }
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(AppColors.success)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
                         }
-                        .padding()
-                        .frame(maxWidth: .infinity)
-                        .background(AppColors.success)
-                        .foregroundColor(.white)
-                        .cornerRadius(12)
+                        
+                        Button(action: {
+                            showingExpenseModal = true
+                        }) {
+                            HStack {
+                                Image(systemName: "minus.circle")
+                                Text("Расходы")
+                            }
+                            .padding()
+                            .frame(maxWidth: .infinity)
+                            .background(AppColors.danger)
+                            .foregroundColor(.white)
+                            .cornerRadius(12)
+                        }
                     }
                     
                     Button(action: {
-                        showingExpenseModal = true
+                        // Загружаем актуальные цели перед открытием
+                        if let goalsData = UserDefaults.standard.data(forKey: "user_goals"),
+                           let decodedGoals = try? JSONDecoder().decode([Goal].self, from: goalsData) {
+                            goals = decodedGoals
+                        }
+                        showingPeriodDistribution = true
                     }) {
                         HStack {
-                            Image(systemName: "minus.circle")
-                            Text("Расходы")
+                            Image(systemName: "chart.bar.fill")
+                            Text("Распределение по периодам")
                         }
                         .padding()
                         .frame(maxWidth: .infinity)
-                        .background(AppColors.danger)
+                        .background(AppColors.primary)
                         .foregroundColor(.white)
                         .cornerRadius(12)
                     }
                 }
-                
-                // Круговая диаграмма расходов
-                ExpenseAnalyticsView(expense: expense)
-                    .frame(height: 200)
-                    .padding()
-                    .background(AppColors.surface)
-                    .cornerRadius(12)
             }
             .padding()
         }
@@ -253,9 +350,20 @@ struct IncomeExpenseView: View {
         if let expenseData = try? JSONEncoder().encode(expense) {
             UserDefaults.standard.set(expenseData, forKey: expenseKey)
         }
+        if let creditsData = try? JSONEncoder().encode(credits) {
+            UserDefaults.standard.set(creditsData, forKey: creditsKey)
+        }
+        
+        // Сохраняем totalMonthlyIncome и totalMonthlyExpense (с учетом кредитов)
+        UserDefaults.standard.set(income.totalMonthlyIncome, forKey: "totalMonthlyIncome")
+        
+        let totalExpenseWithCredits = totalExpensesWithCredits
+        UserDefaults.standard.set(totalExpenseWithCredits, forKey: "totalMonthlyExpense")
         
         monthlySaving = availableForGoals
         hasCalculatedThroughApp = true
+        
+        UserDefaults.standard.set(true, forKey: "hasCalculatedThroughApp")
     }
     
     func loadData() {
@@ -268,169 +376,248 @@ struct IncomeExpenseView: View {
            let decodedExpense = try? JSONDecoder().decode(Expense.self, from: expenseData) {
             expense = decodedExpense
         }
+        
+        if let creditsData = UserDefaults.standard.data(forKey: creditsKey),
+           let decodedCredits = try? JSONDecoder().decode([Credit].self, from: creditsData) {
+            credits = decodedCredits
+        }
+        
+        if let goalsData = UserDefaults.standard.data(forKey: "user_goals"),
+           let decodedGoals = try? JSONDecoder().decode([Goal].self, from: goalsData) {
+            goals = decodedGoals
+        }
+        
+        hasCalculatedThroughApp = UserDefaults.standard.bool(forKey: "hasCalculatedThroughApp")
+        
+        if hasCalculatedThroughApp {
+            monthlySaving = availableForGoals
+        }
     }
 }
 
-// Круговая диаграмма расходов
-struct ExpenseAnalyticsView: View {
+// Круговая диаграмма расходов (оставляем без изменений, но нужна для компиляции)
+struct ExpensePieChart: View {
     let expense: Expense
-    @State private var showingDetails = false
+    @State private var isExpanded = false
     
-    var expenseCategories: [(String, Double, Color)] {
-        let categories = [
-            ("Аренда", expense.rent, Color.red),
-            ("Кредиты", expense.loans, Color.orange),
-            ("Коммуналка", expense.utilities, Color.yellow),
-            ("Продукты", expense.groceries, Color.green),
-            ("Связь", expense.communication, Color.blue),
-            ("Подписки", expense.subscriptions, Color.indigo),
-            ("Транспорт", expense.transport, Color.purple),
-            ("Хобби", expense.hobbies, Color.pink),
-            ("Развлечения", expense.entertainment, Color.cyan),
-            ("Красота", expense.beauty, Color.mint),
-            ("Дополнительно", expense.additional.reduce(0) { $0 + $1.amount }, Color.brown)
+    private var sortedCategories: [(ExpenseCategory, Double)] {
+        let categories: [(ExpenseCategory, Double)] = [
+            (.rent, expense.rent),
+            (.loans, expense.loans),
+            (.utilities, expense.utilities),
+            (.groceries, expense.groceries),
+            (.communication, expense.communication),
+            (.subscriptions, expense.subscriptions),
+            (.transport, expense.transport),
+            (.hobbies, expense.hobbies),
+            (.entertainment, expense.entertainment),
+            (.beauty, expense.beauty),
+            (.marketplaces, expense.marketplaces)
         ]
-        return categories.filter { $0.1 > 0 }
+        
+        return categories
+            .filter { $0.1 > 0 }
+            .sorted { $0.1 > $1.1 }
     }
     
-    var dailyExpenses: [(String, Double)] {
-        // Категории без фиксированной даты платежа
-        let daily = [
-            ("Продукты", expense.groceries),
-            ("Транспорт", expense.transport),
-            ("Развлечения", expense.entertainment),
-            ("Красота", expense.beauty),
-            ("Дополнительно", expense.additional.reduce(0) { $0 + $1.amount })
-        ]
-        return daily.filter { $0.1 > 0 }
+    private var additionalExpensesTotal: Double {
+        expense.additional.reduce(0) { sum, expense in
+            sum + expense.amount
+        }
     }
     
-    var dailyTotal: Double {
-        return dailyExpenses.reduce(0) { $0 + $1.1 } / 30 // Примерно в день
+    private var totalExpenses: Double {
+        expense.totalMonthlyExpense
     }
     
     var body: some View {
         VStack(spacing: 16) {
             Button(action: {
-                withAnimation {
-                    showingDetails.toggle()
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isExpanded.toggle()
                 }
             }) {
                 HStack {
-                    Text("Аналитика расходов")
+                    Text("Аналитика по расходам")
                         .font(.headline)
                         .foregroundColor(AppColors.textPrimary)
                     Spacer()
-                    Image(systemName: showingDetails ? "chevron.up" : "chevron.down")
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
                         .foregroundColor(AppColors.primary)
+                        .font(.subheadline)
                 }
-                .padding()
-                .background(AppColors.surface)
-                .cornerRadius(12)
             }
+            .buttonStyle(PlainButtonStyle())
             
-            if showingDetails {
-                VStack(spacing: 20) {
-                    // Круговая диаграмма и список категорий
-                    HStack(spacing: 20) {
-                        // Круговая диаграмма
+            if totalExpenses > 0 {
+                if isExpanded {
+                    VStack(spacing: 20) {
                         ZStack {
                             Circle()
-                                .stroke(Color.gray.opacity(0.3), lineWidth: 20)
-                                .frame(width: 120, height: 120)
+                                .stroke(Color.gray.opacity(0.2), lineWidth: 20)
+                                .frame(width: 180, height: 180)
                             
-                            ForEach(0..<expenseCategories.count, id: \.self) { index in
-                                Circle()
-                                    .trim(from: startFraction(for: index), to: endFraction(for: index))
-                                    .stroke(expenseCategories[index].2, lineWidth: 20)
-                                    .frame(width: 120, height: 120)
-                                    .rotationEffect(.degrees(-90))
+                            ForEach(Array(sortedCategories.enumerated()), id: \.offset) { index, item in
+                                let (category, amount) = item
+                                let percentage = amount / totalExpenses
+                                let startAngle = calculateStartAngle(for: index)
+                                let endAngle = startAngle + Angle(degrees: 360 * percentage)
+                                
+                                PieSlice(startAngle: startAngle, endAngle: endAngle, color: getColorForCategory(category))
+                                    .frame(width: 180, height: 180)
+                            }
+                            
+                            if additionalExpensesTotal > 0 {
+                                let additionalPercentage = additionalExpensesTotal / totalExpenses
+                                let startAngle = calculateStartAngle(for: sortedCategories.count)
+                                let endAngle = startAngle + Angle(degrees: 360 * additionalPercentage)
+                                
+                                PieSlice(startAngle: startAngle, endAngle: endAngle, color: getColorForCategory(.additional))
+                                    .frame(width: 180, height: 180)
                             }
                             
                             VStack {
-                                Text("Всего")
+                                Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: totalExpenses)) ?? "0")")
+                                    .font(.title2).bold()
+                                    .foregroundColor(AppColors.textPrimary)
+                                Text("₽")
                                     .font(.caption)
                                     .foregroundColor(AppColors.textSecondary)
-                                Text("\(numberFormatter.string(from: NSNumber(value: expense.totalMonthlyExpense)) ?? "0") ₽")
-                                    .font(.caption)
-                                    .bold()
-                                    .foregroundColor(AppColors.textPrimary)
                             }
                         }
+                        .frame(width: 180, height: 180)
                         
-                        // Список категорий
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(0..<expenseCategories.count, id: \.self) { index in
-                                let category = expenseCategories[index]
-                                HStack {
-                                    Circle()
-                                        .fill(category.2)
-                                        .frame(width: 8, height: 8)
-                                    Text(category.0)
-                                        .font(.caption)
-                                        .foregroundColor(AppColors.textSecondary)
-                                    Spacer()
-                                    Text("\(numberFormatter.string(from: NSNumber(value: category.1)) ?? "0") ₽")
-                                        .font(.caption)
-                                        .foregroundColor(AppColors.textPrimary)
-                                }
+                        VStack(spacing: 8) {
+                            ForEach(Array(sortedCategories.enumerated()), id: \.offset) { index, item in
+                                let (category, amount) = item
+                                ExpenseCategoryRow(
+                                    category: category,
+                                    amount: amount,
+                                    total: totalExpenses,
+                                    color: getColorForCategory(category)
+                                )
+                            }
+                            
+                            if additionalExpensesTotal > 0 {
+                                ExpenseCategoryRow(
+                                    category: .additional,
+                                    amount: additionalExpensesTotal,
+                                    total: totalExpenses,
+                                    color: getColorForCategory(.additional)
+                                )
                             }
                         }
+                        .padding(.horizontal, 4)
                     }
-                    
-                    // Ежедневные траты
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Ежедневные траты")
-                            .font(.headline)
-                            .foregroundColor(AppColors.textPrimary)
-                        
-                        Text("Примерно в день: \(numberFormatter.string(from: NSNumber(value: dailyTotal)) ?? "0") ₽")
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    HStack {
+                        Text("Общая сумма расходов:")
                             .font(.subheadline)
+                            .foregroundColor(AppColors.textPrimary)
+                        Spacer()
+                        Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: totalExpenses)) ?? "0") ₽")
+                            .font(.subheadline).bold()
                             .foregroundColor(AppColors.primary)
-                        
-                        ForEach(0..<dailyExpenses.count, id: \.self) { index in
-                            let daily = dailyExpenses[index]
-                            HStack {
-                                Text(daily.0)
-                                    .font(.caption)
-                                    .foregroundColor(AppColors.textSecondary)
-                                Spacer()
-                                Text("\(numberFormatter.string(from: NSNumber(value: daily.1 / 30)) ?? "0") ₽/день")
-                                    .font(.caption)
-                                    .foregroundColor(AppColors.textPrimary)
-                            }
-                        }
                     }
-                    .padding()
-                    .background(AppColors.background)
-                    .cornerRadius(8)
+                    .padding(.vertical, 8)
                 }
-                .padding()
-                .background(AppColors.surface)
-                .cornerRadius(12)
+            } else {
+                Text("Нет данных о расходах")
+                    .font(.subheadline)
+                    .foregroundColor(AppColors.textSecondary)
+                    .padding()
             }
         }
     }
     
-    private func startFraction(for index: Int) -> CGFloat {
-        let total = expense.totalMonthlyExpense
-        guard total > 0 else { return 0 }
-        
-        var sum: Double = 0
+    private func calculateStartAngle(for index: Int) -> Angle {
+        var totalPercentage: Double = 0
         for i in 0..<index {
-            sum += expenseCategories[i].1
+            if i < sortedCategories.count {
+                totalPercentage += sortedCategories[i].1 / totalExpenses
+            }
         }
-        return CGFloat(sum / total)
+        return Angle(degrees: 360 * totalPercentage)
     }
     
-    private func endFraction(for index: Int) -> CGFloat {
-        let total = expense.totalMonthlyExpense
-        guard total > 0 else { return 0 }
-        
-        var sum: Double = 0
-        for i in 0...index {
-            sum += expenseCategories[i].1
+    private func getColorForCategory(_ category: ExpenseCategory) -> Color {
+        switch category {
+        case .rent: return AppColors.primary
+        case .loans: return AppColors.danger
+        case .utilities: return AppColors.warning
+        case .groceries: return AppColors.success
+        case .communication: return AppColors.accent
+        case .subscriptions: return Color.purple
+        case .transport: return Color.orange
+        case .hobbies: return Color.pink
+        case .entertainment: return Color.blue
+        case .beauty: return Color.mint
+        case .marketplaces: return Color.teal
+        case .additional: return Color.gray
         }
-        return CGFloat(sum / total)
+    }
+}
+
+struct PieSlice: View {
+    let startAngle: Angle
+    let endAngle: Angle
+    let color: Color
+    
+    var body: some View {
+        GeometryReader { geometry in
+            Path { path in
+                let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
+                let radius = min(geometry.size.width, geometry.size.height) / 2 - 10
+                
+                path.move(to: center)
+                path.addArc(center: center,
+                           radius: radius,
+                           startAngle: startAngle,
+                           endAngle: endAngle,
+                           clockwise: false)
+                path.closeSubpath()
+            }
+            .fill(color)
+        }
+    }
+}
+
+struct ExpenseCategoryRow: View {
+    let category: ExpenseCategory
+    let amount: Double
+    let total: Double
+    let color: Color
+    
+    private var percentage: Double {
+        guard total > 0 else { return 0 }
+        return (amount / total) * 100
+    }
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+            
+            Text(category.rawValue)
+                .font(.subheadline)
+                .foregroundColor(AppColors.textPrimary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .truncationMode(.tail)
+            
+            Text("\(Int(percentage))%")
+                .font(.caption)
+                .foregroundColor(AppColors.textSecondary)
+                .frame(width: 40, alignment: .trailing)
+            
+            Text("\(AppUtils.numberFormatter.string(from: NSNumber(value: amount)) ?? "0") ₽")
+                .font(.subheadline)
+                .foregroundColor(AppColors.textPrimary)
+                .frame(width: 90, alignment: .trailing)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
     }
 }

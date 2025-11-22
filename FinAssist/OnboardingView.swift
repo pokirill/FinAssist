@@ -35,76 +35,70 @@ struct OnboardingView: View {
     var onStart: (() -> Void)?
 
     var body: some View {
-        VStack {
-            TabView(selection: $currentIndex) {
-                ForEach(0..<slides.count, id: \ .self) { idx in
-                    VStack(spacing: 32) {
-                        Spacer()
-                        Image(systemName: slides[idx].imageName)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: 140, height: 140)
-                            .foregroundColor(Color.blue)
-                        Text(slides[idx].text)
-                            .font(.title2.bold())
-                            .multilineTextAlignment(.center)
-                            .foregroundColor(Color(.label))
-                            .padding(.horizontal, 24)
-                        Spacer()
-                    }
-                    .tag(idx)
-                }
-            }
-            .tabViewStyle(PageTabViewStyle())
-            .animation(.easeInOut, value: currentIndex)
-            .frame(height: 400)
-            .onAppear {
-                startTimer()
-            }
-            .onDisappear {
-                stopTimer()
-            }
-
-            HStack {
-                Button(action: {
-                    withAnimation {
-                        if currentIndex > 0 {
-                            currentIndex -= 1
+        ZStack {
+            AppColors.background.ignoresSafeArea()
+            
+            VStack {
+                TabView(selection: $currentIndex) {
+                    ForEach(0..<slides.count, id: \.self) { idx in
+                        VStack(spacing: 32) {
+                            Spacer()
+                            Image(systemName: slides[idx].imageName)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 140, height: 140)
+                                .foregroundColor(AppColors.primary)
+                            Text(slides[idx].text)
+                                .font(.title2.bold())
+                                .multilineTextAlignment(.center)
+                                .foregroundColor(AppColors.textPrimary)
+                                .padding(.horizontal, 24)
+                            Spacer()
                         }
+                        .tag(idx)
                     }
-                }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 24, weight: .bold))
-                        .foregroundColor(currentIndex == 0 ? .gray : .blue)
-                        .padding()
                 }
-                .disabled(currentIndex == 0)
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+                .onChange(of: currentIndex) { newValue in
+                    stopTimer()
+                    startTimer()
+                }
+                .frame(maxHeight: .infinity)
+                .onAppear {
+                    startTimer()
+                }
+                .onDisappear {
+                    stopTimer()
+                }
 
-                Spacer()
-
+                // Индикаторы страниц
                 HStack(spacing: 10) {
-                    ForEach(0..<slides.count, id: \ .self) { idx in
+                    ForEach(0..<slides.count, id: \.self) { idx in
                         Circle()
-                            .fill(idx == currentIndex ? Color.blue : Color.gray.opacity(0.3))
+                            .fill(idx == currentIndex ? AppColors.primary : Color.gray.opacity(0.3))
                             .frame(width: 8, height: 8)
                     }
                 }
+                .padding(.bottom, 20)
 
-                Spacer()
-
-                Button(action: {
-                    onStart?()
-                }) {
-                    Text("Начать")
-                        .font(.headline)
-                        .foregroundColor(.white)
-                        .frame(width: 120, height: 44)
-                        .background(Color.blue)
-                        .cornerRadius(16)
+                // Кнопка "Начать" внизу экрана
+                if currentIndex == slides.count - 1 {
+                    Button(action: {
+                        stopTimer()
+                        onStart?()
+                    }) {
+                        Text("Начать")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 50)
+                            .background(AppColors.primary)
+                            .cornerRadius(16)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 32)
                 }
             }
-            .padding(.horizontal)
-            .padding(.bottom, 32)
         }
     }
 
